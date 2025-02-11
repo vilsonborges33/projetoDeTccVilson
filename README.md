@@ -1,4 +1,12 @@
 Biblioteca Loramesh
+
+Author: Vilson C. B. de M. Neves.
+Descricao:  
+   - Este código consiste na automação de sistemas de medição de potencial em dutos terrestres protegidos por proteção catódica 
+   por corrente impressa
+
+O código de referencia foi feito pelos autores citados abaixo:
+
 Author: Renato F. Fernandes, Natan Ferreira Alvarenga, Hermes G. Fernandes Neri
 Descricao:  
    - Codigo lora utilizando placas Heltec WIFI ESP32 lora V2 e V3. 
