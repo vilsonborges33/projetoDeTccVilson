@@ -6,10 +6,15 @@
 #include <RadioLib.h>
 #include "esp_log.h"
 
+#include <Wifi.h>
+#include <PubSubClient.h>
+
 #if DISPLAY_ENABLE
 #include "OLED\SSD1306.h"
 #endif
 //#define ARDUINO_RUNNING_CORE 1
+
+#define MESTRE 1
 
 TaskHandle_t App_TaskHandle = nullptr;
 TaskHandle_t EndDev_TaskHandle = nullptr;
@@ -41,135 +46,53 @@ uint32_t current_FR = 0;  // Current free-running time from ESP32 B
 int32_t drift = 0;         // Measured drift
 float adjustedPeriod = EXPECTED_PERIOD_MS; // Adjusted period for ESP32 A
 
-void AppTask(void * parameter) {
+const char* ssid = "301_MZNET_2.4G";
+const char* password = "93139039";
+const char* mqtt_server = "192.168.1.25";
 
-    bool ret=0;
-    uint8_t framesize=0;
+//pubsubclient
+WiFiClient leitorDeTensao;
+PubSubClient client(leitorDeTensao);
 
-    for(;;){
-#if 0
-        switch (nextstate) {
-            case ST_TXBEACON:
-              if (loramesh.mydd.devtype == DEV_TYPE_ROUTER) {
-                send_pct = 1;
-                nextstate = ST_RXWAIT; 
-              }
-            case ST_RXWAIT:
-              if (loramesh.receivePacket()){
-                if (loramesh.mydd.devtype == DEV_TYPE_ROUTER){
-                    //o router nao faz nada com o dado
-                    //somente calcula indices de desempenho
-                    //log_i("Pacote eh para mim e eu sou Router!!!!");
+//pubsubclient
+void setup_wifi() {
 
-                    //proximo estado eh enviar o beacon novamente
-                    nextstate = ST_STANDBY;
-                }
-                else{
-                    //o end device deve tratar o pacote e retransmitir se for beacon
-                    //sincronizar o relogio atual
-                    //log_i("RX PCT SEND RESP seqnum = %d",lastpkt.seqnum );
-                    //send_pct = 1;
-                    nextstate = ST_STANDBY; 
-                }
-              }
-              break;
-            case ST_TXDATA: 
-               if ((loramesh.mydd.devtype == DEV_TYPE_ENDDEV) && (actualslot == DATA_SLOT)){
-                   //aqui eh minha janela de dados...devo enviar o pacote de dados...
-                    //log_i("Aqui eh hora de enviar os dados!!!!");
-                    nextstate = ST_RXWAIT; 
-               }    
-            default:
-              break;
-        } 
-#endif
-
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-    } 
-}
-
-
-//calcula a quantidade de polls e erros
-void setindpolls(){
-    uint16_t lastmyseqnum = loramesh.getLastSeqNum();
-    uint16_t lastpacketseqnum = loramesh.getLastPctSeqNum();
-    if (lastmyseqnum == lastpacketseqnum){
-        idx_response++;
-        log_i("Tx.sn=%d Rx.sn=%d Rx.cnt=%d ",lastmyseqnum, lastpacketseqnum, idx_response);
-
-        #if DISPLAY_ENABLE  
-        {
-            char display_line3[20];
-            sprintf(display_line3,"Tx=%d Rx=%d", lastmyseqnum, idx_response);
-            Heltec.DisplayShowAll(display_line1,display_line2,display_line3);
-            //log_i("%s",display_line3);
-        }    
-        #endif
-
+    log_i("Connecting to ");
+    log_i("Connecting to %s",ssid);
+  
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+  
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      log_i(".");
     }
-
-
-}
-
-
-void toogleled(uint8_t ledpin){
-   ledtoogle = !ledtoogle;
-   digitalWrite(ledpin, ledtoogle);
-}
-
-void ledblink(uint8_t ledpin){
-   
-   digitalWrite(ledpin, HIGH);
-   delay(100);
-   digitalWrite(ledpin, LOW);
-
-}
-
-#if 0
-void standby() {
-    //Get actual priority
-    UBaseType_t prevPriority = uxTaskPriorityGet(NULL);
-
-    //Set max priority
-    vTaskPrioritySet(NULL, configMAX_PRIORITIES - 1);
-
-    //int16_t res = loramesh.standby();
-    //if (res != 0)
-    //    log_e("Standby gave error: %d", res);
-
-    //Clear Dio Actions
-    //loramesh.clearDioActions();
-
-    //Suspend all tasks
-    vTaskSuspend(App_TaskHandle);
-    //vTaskSuspend(EndDev_TaskHandle);
-
-    //Set previous priority
-    vTaskPrioritySet(NULL, prevPriority);
-
-}
-
-void start() {
-    // Get actual priority
-    UBaseType_t prevPriority = uxTaskPriorityGet(NULL);
-
-    // Set max priority
-    vTaskPrioritySet(NULL, configMAX_PRIORITIES - 1);
-
-    // Resume all tasks
-    vTaskResume(App_TaskHandle);
-    //vTaskResume(EndDev_TaskHandle);
-
-    // Start Receiving
-    loramesh.startReceiving();
-
-    // Set previous priority
-    vTaskPrioritySet(NULL, prevPriority);
-}
-#endif
+  
+    log_i("WiFi connected");
+    log_i("IP address: ");
+    log_i("%s", WiFi.localIP());
+  }
+  
+  void reconnect() {
+    
+    while (!client.connected()) {
+        log_i("Attempting MQTT connection...");
+      
+      if (client.connect("leitorDetensao")) {
+        log_i("connected");
+       
+      } else {
+        log_i("failed, rc=");
+        log_i("%s",client.state());
+        log_i(" try again in 5 seconds");
+        delay(5000);
+      }
+    }
+  }
 
 void setup()
 {
+    
     uint8_t ret=0;
 
     Serial.begin(9600);
@@ -177,189 +100,29 @@ void setup()
     Heltec.begin(); //display
 
     loramesh.begin(); //radio
-}
 
+    pinMode(1, INPUT);
+    pinMode(2, OUTPUT);
 
-void node_init_sync(uint32_t new_FR) {
-    uint32_t auxajust;
-    // Update current free-running timer value
-    current_FR = new_FR;
-
-    // If this is not the first measurement, calculate drift
-    if (previous_FR != 0) {
-        // Calculate drift (difference in free-running timers minus expected sync interval)
-        drift = (current_FR - previous_FR) - SYNC_INTERVAL_MS;
-
-        // Adjust period using a proportional control
-        adjustedPeriod -= drift * ADJUSTMENT_FACTOR;
-        // Ensure the adjusted period remains within valid bounds
-        adjustedPeriod = MAX(MAX_VAL, MIN(MIN_VAL, adjustedPeriod)); 
-    }
-
-    // Update the timer period 
-    //setTimerPeriod(adjustedPeriod);
-     syncronized = true;
-
-    //log_i("previous_FR=%d currentB_FR=%d adjustedPeriod=%d",previous_FR,current_FR, adjustedPeriod);
-
-    // Store the current free-running timer as the previous value for the next cycle
-    previous_FR = current_FR;
-}
-
-#if 0
-//void setTimerPeriod(float period) {
-//    timerAlarmWrite(timer, (uint32_t)(period * 1000), true); // Assuming microsecond-based timer
-//}
-uint32_t node_init_sync (uint32_t beacontime){
-  uint32_t deltams;
-  deltams = (millis() - lastabstime);  
-  lastabstime = millis() + (deltams/4);
-  lastscantime_ms = beacontime;
-  actualslot=0;
-  nextstate = ST_RXWAIT;
-
-  log_i("Sincronizando lastscantime_ms=%d lastabstime=%d deltams=%d", lastscantime_ms, lastabstime,deltams);
-
-  return deltams;
-}
-
-uint32_t ptk_get_cycle_duration_ms(){
-    return (SLOT_INTERVAL * MAX_SLOTS);
-}
-
-uint32_t cycle_start_time_ms=0;
-/*
- * 	See header file
- */
-uint8_t cySetNextPossibleStart( uint32_t starttime_ms )
-{
-	uint32_t curr_time_ms = 0;
-	if( cycle_start_time_ms != 0 ){	// start time already set
-		return 1;
-	}
-	curr_time_ms = millis();
-
-	while( starttime_ms <= curr_time_ms ){
-		starttime_ms += ptk_get_cycle_duration_ms( );
-	}
-	cycle_start_time_ms = starttime_ms;
-	return 0;
-}
-
-/*
- * 	See header file
- */
-uint32_t ptk_proc_node_init_sync ( ptk_core_state_s *pstate, uint32_t to_ms )
-{
-	loramesh_sync_s best_beacon;
-
-	if(node_sync_to_best_beacon( to_ms, &best_beacon ) == 0){
-		// beacon found
-		pstate->join_agent.fav_address = best_beacon.source_address;
-		pstate->join_agent.agent_hop_count = best_beacon.num_hops;
-		pstate->join_agent.agent_subnet_id = best_beacon.subnet_id;
-		pstate->join_agent.role = JOIN_ROLE_JOINEE;
-		pstate->join_agent.state = JOIN_STT_PREPARED;
-		if( best_beacon.num_hops == 0 ){
-			// direct join at the repeater
-			pstate->join_agent.type = JOIN_TYPE_DIRECT;
-		} else {
-			pstate->join_agent.type = JOIN_TYPE_INDIRECT;
-		}
-		return best_beacon.utc_time;
-	} else {
-		// no beacon found
-		return 0;
-	}
-}
-#endif
-
-
-void slottimecontrol(){
-    long currscantime_ms = 0;
-
-    if (lastabstime == 0){
-        lastabstime = millis();
-    }
+    pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
     
-    if (syncronized == true){
-        syncronized = false;
-        slot_period = (uint32_t) adjustedPeriod;
-    }
+    setup_wifi();
+    client.setServer(mqtt_server, 1883);
+}
+
+void coneccao(){
+    if(WiFi.status() == WL_CONNECTED)
+        digitalWrite(2, HIGH);
     else
-     slot_period = SLOT_INTERVAL;
-
-    currscantime_ms = (millis() - lastabstime);  
-    if (currscantime_ms >= slot_period){
-        lastabstime = millis();
-        lastscantime_ms += currscantime_ms;
-        actualslot++;
-
-        if (actualslot >= MAX_SLOTS){
-            actualslot=0;
-            if (loramesh.mydd.devtype == DEV_TYPE_ROUTER) 
-                nextstate = ST_TXBEACON;
-            else
-                nextstate = ST_RXWAIT;
-        }
-        //log_i("ActualSlot=%d scantime=%d lastAbsTime=%d",actualslot,lastscantime_ms,lastabstime);
-    }
+        digitalWrite(2, LOW);
 }
-
-//termina
-
-void buf_io_put32_tl(uint32_t value, uint8_t *buf)
-{
-    buf[0] = (uint8_t)(value      );
-    buf[1] = (uint8_t)(value >> 8 );
-    buf[2] = (uint8_t)(value >> 16);
-    buf[3] = (uint8_t)(value >> 24);
-}
- 
-void buf_io_put16_tl(uint16_t value, uint8_t *buf)
-{
-    buf[0] = (uint8_t)(value     );
-    buf[1] = (uint8_t)(value >> 8);
-}
- 
-uint32_t buf_io_get32_fl(uint8_t *buf)
-{
-    uint32_t value = buf[0] | (buf[1] << 8 ) | (((uint64_t)buf[2]) << 16) | (((uint64_t)buf[3]) << 24);
-    return value;
-}
- 
-uint16_t buf_io_get16_fl(uint8_t *buf)
-{
-    uint16_t value = buf[0] | (buf[1] << 8);
-    return value;
-}
- 
-
- 
-void recv(uint8_t *buffer)
-{
-    uint8_t *pbuf = buffer;
- 
-    uint8_t addr_slave = *pbuf++;
-    uint8_t addr_master = *pbuf++;
-    uint8_t func = *pbuf++;
- 
-    uint16_t seqnum = buf_io_get16_fl(pbuf);
-    pbuf += 2;
- 
-    uint32_t dtvalue = buf_io_get32_fl(pbuf);
-    pbuf += 4;
- 
-}
-
-#define MESTRE 10
 
 void loop() {
     
     
     uint8_t framesize;
     uint8_t rtaddr=0;
-    
+    uint32_t leitura_adc = analogRead(1);
     int len = 0; 
     bool ret=0;
     uint32_t voltage=3300; 
@@ -372,6 +135,8 @@ void loop() {
 
     if (messageReceived) {
         delay(3000);
+        reconnect();
+        coneccao();
         log_i("Mestre: mensagem recebida"); 
         messageReceived = false;
         ret = loramesh.receivePacket();
@@ -386,6 +151,9 @@ void loop() {
         log_i("1 =  %x", buf[8]);
 
         log_i("Tensão valor_lido %d", valorLido); 
+        client.publish("Leitor_Tensao", String(valorLido).c_str());
+
+       
         
     } 
     
@@ -395,7 +163,7 @@ void loop() {
         messageReceived = false;
         ret = loramesh.receivePacket();
         //Fazer a checagem do segundo byte
-        framesize = loramesh.sendPacketRes(1, voltage); //engereço de destino / valor
+        framesize = loramesh.sendPacketRes(1, leitura_adc); //engereço de destino / valor
     } 
     #endif
 
