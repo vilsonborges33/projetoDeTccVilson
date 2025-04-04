@@ -48,7 +48,7 @@ float adjustedPeriod = EXPECTED_PERIOD_MS; // Adjusted period for ESP32 A
 
 const char* ssid = "301_MZNET_2.4G";
 const char* password = "93139039";
-const char* mqtt_server = "192.168.1.25";
+const char* mqtt_server = "ec2-18-228-8-224.sa-east-1.compute.amazonaws.com";
 
 //pubsubclient
 WiFiClient leitorDeTensao;
@@ -101,12 +101,12 @@ void setup()
 
     loramesh.begin(); //radio
 
-    pinMode(1, INPUT);
+    pinMode(7, INPUT);
     pinMode(2, OUTPUT);
 
     pinMode(BUILTIN_LED, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
     
-    setup_wifi();
+    setup_wifi(); //so mestre
     client.setServer(mqtt_server, 1883);
 }
 
@@ -122,7 +122,8 @@ void loop() {
     
     uint8_t framesize;
     uint8_t rtaddr=0;
-    uint32_t leitura_adc = analogRead(1);
+    uint32_t leitura_adc = analogRead(7);
+    delay(500);
     int len = 0; 
     bool ret=0;
     uint32_t voltage=3300; 
@@ -151,7 +152,7 @@ void loop() {
         log_i("1 =  %x", buf[8]);
 
         log_i("Tensão valor_lido %d", valorLido); 
-        client.publish("Leitor_Tensao", String(valorLido).c_str());
+        client.publish("/Leitor_Tensao", String(valorLido).c_str());
 
        
         
